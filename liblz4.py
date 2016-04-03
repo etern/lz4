@@ -37,7 +37,7 @@ def print_hex(b):
 	print(base64.b16encode(b))
 
 '''
-little endian byte conversions
+little endian byte operations
 '''
 def read_le_uint32(buf, pos):
 	return int.from_bytes(buf[pos:pos+4], 'little')
@@ -117,8 +117,8 @@ def copy_sequence(dst_buf, dst_head, literal, match):
 		else:
 			token[0] = token[0] | match_len
 
-	print('lit len ',len(literal), '|match ', match, '|seq len', dst_ptr-dst_head)
-	print_hex(dst_buf[dst_head:dst_ptr])
+	#print('lit len ',len(literal), '|match ', match, '|seq len', dst_ptr-dst_head)
+	#print_hex(dst_buf[dst_head:dst_ptr])
 	return dst_ptr - dst_head
 
 def lz4_compress_sequences(dest_buffer, src_buffer):
@@ -136,10 +136,12 @@ def lz4_compress_sequences(dest_buffer, src_buffer):
 	MAX_INDEX = src_len - MFLIMIT
 	#pdb.set_trace()
 	while src_ptr < MAX_INDEX:
-		match_value = read_le_uint32(src_buffer, src_ptr)
-		match_pos = find_match(pos_table, match_value, src_buffer, src_ptr)
+		current_value = read_le_uint32(src_buffer, src_ptr)
+		match_pos = find_match(pos_table, current_value, src_buffer, src_ptr)
 		if match_pos is not None:
 			length = count_match(src_buffer, match_pos, src_ptr, MAX_INDEX)
+			if length < MIN_MATCH: # because of MAX_INDEX
+				break
 			dst_ptr += copy_sequence(dest_buffer,
 									 dst_ptr,
 									 memoryview(src_buffer)[literal_head:src_ptr],
@@ -147,7 +149,7 @@ def lz4_compress_sequences(dest_buffer, src_buffer):
 			src_ptr += length
 			literal_head = src_ptr
 		else:
-			pos_table.set_position(match_value, src_ptr)
+			pos_table.set_position(current_value, src_ptr)
 			src_ptr += 1
 	# last literal
 	dst_ptr += copy_sequence(dest_buffer, dst_ptr,
@@ -186,7 +188,9 @@ class Compresser:
 	def compress_file(self, src_name, dst_name):
 		self.src_file = open(src_name, mode='rb')
 		self.dst_file = open(dst_name, mode='wb')
-		self.compress_frame()
+		self._compress_frame()
+		self.src_file.close()
+		self.dst_file.close()
 
 	def _frame_header(self):
 		header = bytearray()
@@ -208,7 +212,7 @@ class Compresser:
 		return header
 
 
-	def compress_frame(self):
+	def _compress_frame(self):
 		'''
 		frame contains all the blocks, plus frame header and checksum
 		'''
@@ -229,21 +233,100 @@ class Compresser:
 			nbytes = read_src(self.src_buffer)
 
 		self.dst_file.write((0).to_bytes(4, 'little')) #EndMark
-		self.dst_file.write(xxh.intdigest().to_bytes(4, 'little')) #EndMark
+		self.dst_file.write(xxh.intdigest().to_bytes(4, 'little')) #CheckSum
+		print("it's done")
 
+
+
+def lz4_decompress_sequences(src_buf, dst_buf):
+	src_len = len(src_buf)
+	src_ptr = 0
+	while src_ptr < src_len:
+		token = memoryview(src_buf)[src_ptr : src_ptr+1]
+		src_ptr += 1
+		# get literal length
+		lit_len = (token[0] >> 4) & 0x0F
+		if lit_len == 15:
+			while src_buf[src_ptr] == 255:
+				lit_len += 255
+				src_ptr += 1
+			lit_len += src_buf[src_ptr]
+			src_ptr += 1
+		#copy literal
+		dst_buf += src_buf[src_ptr : src_ptr+lit_len]
+		src_ptr += lit_len
+		if src_ptr >= src_len: # last literal
+			break
+		#get match offset
+		offset = int.from_bytes(src_buf[src_ptr:src_ptr+2], 'little')
+		src_ptr += 2
+		#get match length
+		match_len = token[0] & 0x0F
+		if match_len == 15:
+			while src_buf[src_ptr] == 255:
+				match_len += 255
+				src_ptr += 1
+			match_len += src_buf[src_ptr]
+			src_ptr += 1
+		match_len += MIN_MATCH
+		#print(lit_len, offset, match_len)
+		#copy match
+		match_ptr = len(dst_buf) - offset
+		while match_len > 0:
+			dst_buf.append(dst_buf[match_ptr])
+			match_ptr += 1
+			match_len -= 1
+
+
+def lz4_decompress_block(src_block):
+	block_size = int.from_bytes(src_block[0:4], 'little')
+	src_ptr = 4
+	dst_buf = bytearray()
+	dst_len = 0
+	lz4_decompress_sequences(memoryview(src_block)[4:4+block_size], dst_buf)
+	return dst_buf
+
+
+class Extractor:
+	def __init__():
+		pass
+
+	def extract_file(self, src_name, dst_name):
+		self.src_file = open(src_name, mode='rb')
+		self.dst_file = open(dst_name, mode='wb')
+		self.extract_frame()
+		self.src_file.close()
+		self.dst_file.close()
+
+	def extract_frame():
+		pass
 
 def test_comp_sequences():
-	src_buf = b'00000000000001111111111111000000000000011111111111110000000000000111111111111100000000000001111111111111'
+	src_buf = b'0000000000000111111111111100000000000001111111111111'
 	print('src len: ', len(src_buf))
 	dst_len = worst_case_block_length(len(src_buf))
 	dest_buf = bytearray(b'\0') * dst_len
 	compressed_len = lz4_compress_sequences(dest_buf, src_buf)
 	dest_buf = dest_buf[0:compressed_len]
 	print_hex(dest_buf)
+	return dest_buf
 
 def test_compresser():
 	comp = Compresser()
 	comp.compress_file('testfolder/testfile.txt', 'testout.bin')
 
+def test_decompress():
+	src_buf = b'11111111111100000000000001111111111111'
+	print('original: ')
+	print_hex(src_buf)
+	block_len = worst_case_block_length(len(src_buf))
+	block = bytearray(b'\0') * block_len
+	block_len = lz4_compress_block(block, src_buf)
+	block = block[0:block_len]
+	# restore block
+	restored = lz4_decompress_block(block)
+	print('restored: ')
+	print_hex(restored)
+
 if __name__ == '__main__':
-	test_compresser()
+	test_decompress()
