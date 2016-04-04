@@ -1,7 +1,7 @@
 # lz4
 simple lz4 in python
 
-lz4 is an extremely fast compress algrithom [lz4 by Yann Collect](https://github.com/Cyan4973/lz4)
+lz4 is extremely fast compress algrithom by [Yann Collect](https://github.com/Cyan4973/lz4)
 
 ##Usage:
   + Compress a folder:
