@@ -7,15 +7,16 @@ import getopt
 import tarfile
 import tempfile
 import liblz4
+import lz4archiver
 
 
 def make_archive(dirname):
     f, ar_name = tempfile.mkstemp('.tar')
     os.close(f)
-    with tarfile.open(ar_name, "w") as tar:
-        for root, dirs, files in os.walk(dirname, topdown=False):
-            for name in files:
-                tar.add(os.path.join(root, name))
+    ar_file = lz4archiver.ArchiveFile()
+    ar_file.open_for_write(ar_name)
+    ar_file.packfolder(dirname)
+    ar_file.close()
     return ar_name
 
 
@@ -32,12 +33,15 @@ def extract_folder(filename, dest_dir='.'):
     os.close(f)
     try:
         extractor.extract_file(filename, ar_name)
-        tar = tarfile.open(ar_name)
-        tar.extractall(dest_dir)
-        tar.close()
+        ar_file = lz4archiver.ArchiveFile()
+        ar_file.open_for_read(ar_name)
+        ar_file.unpack(dest_dir)
+        ar_file.close()
         print('Successfully extracted ', filename, ' to current directory')
     except liblz4.BadFileError:
         print('Error: Unrecognized file format')
+    except lz4archiver.UnpackError:
+    	print('Error: Unrecognized archive format')
 
 
 usage =\
